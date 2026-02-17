@@ -23,20 +23,20 @@ cd example-golangci-lint-ctrlflow-issue
 make reproduce
 ```
 
-The bug triggers when the golangci-lint analysis cache is partially stale (some fact files present, some missing). If the first run succeeds, force partial cache invalidation:
+`make reproduce` runs two steps automatically:
 
-```bash
-# Clear the Go build cache but keep golangci-lint's analysis cache
-go clean -cache
-./custom-gcl run -v
-```
+1. **Step 1** — runs standard linters (bodyclose, staticcheck, govet, etc.) which populate the `ctrlflow` facts cache for dependency packages.
+2. **Step 2** — adds nilaway. Nilaway has no cached facts, so `loadCachedFacts()` fails. This calls `markDepsForAnalyzingSource()` which marks `buildssa.needAnalyzeSource = true`. But `markDepsForAnalyzingSource` is not recursive — it doesn't mark `ctrlflow`. Since ctrlflow's facts were cached in step 1, ctrlflow is NOT in the "failed facts" loop, so its `needAnalyzeSource` stays `false`. In the analyze phase, ctrlflow skips execution (returns nil Result), and buildssa panics.
 
-Or delete some of the cached fact files:
+For comparison, `make clean-reproduce` runs with a clean cache where the bug does NOT occur — proving the cache-dependent nature of the issue.
 
-```bash
-find ~/.cache/golangci-lint -type f | shuf | head -n $(( $(find ~/.cache/golangci-lint -type f | wc -l) / 2 )) | xargs rm -f
-./custom-gcl run -v
-```
+### Why two steps are needed
+
+The bug requires a **partially populated analysis cache**. It does NOT reproduce on a clean cache.
+
+With a clean cache, ALL analyzers fail facts loading, so ctrlflow itself gets marked for source analysis and runs fine. The bug only occurs when ctrlflow's facts are cached (from a previous run with standard linters) but a new analyzer (nilaway) that transitively depends on ctrlflow fails facts loading.
+
+This matches real-world usage: projects typically run golangci-lint in CI with a set of linters, and adding nilaway later triggers the panic because the cache already has ctrlflow facts but not nilaway facts.
 
 ## Expected result
 
